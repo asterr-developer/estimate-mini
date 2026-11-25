@@ -1,0 +1,428 @@
+<header class="masthead">
+    <div class="frame masthead-inner">
+        <router-link class="brand" to="/">
+            <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 4h7l4 4v12H7zM14 4v5h4M10 13h5M10 16h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+            Смета
+        </router-link>
+        <nav v-if="!page.startsWith('/p/')" aria-label="Рабочие разделы">
+            <router-link to="/">Редактор</router-link>
+            <router-link to="/history">Предложения</router-link>
+            <router-link to="/workspace">Кабинет</router-link>
+            <router-link to="/today">Сегодня</router-link>
+            <router-link v-if="user" to="/telegram-inbox">Telegram</router-link>
+        </nav>
+        <div v-if="sessionReady && !page.startsWith('/p/')" class="account-actions">
+            <span v-if="user">{{ user.name }}</span>
+            <button v-if="user" type="button" class="secondary" :disabled="pending" @click="signOut">Выйти</button>
+            <button v-else type="button" class="secondary" @click="error = ''; accountDialog.showModal()">Войти</button>
+        </div>
+    </div>
+</header>
+<main class="frame">
+    <p v-if="error" role="alert" class="feedback error">{{ error }}</p>
+    <p v-if="notice" role="status" class="feedback success">{{ notice }}</p>
+    <template v-if="page === '/'">
+        <header class="heading">
+            <div><h1>Коммерческое предложение</h1>
+            <p v-if="draft.revision_of">Новая версия на основе {{ proposalNumber(draft.revision_of) }}.</p>
+            <p v-else>Укажите услуги и цены, проверьте документ и отправьте ссылку клиенту.</p></div>
+            <div class="editor-actions">
+                <button type="button" class="secondary" :disabled="pending" @click="newDraft">Чистый черновик</button>
+                <button v-if="user" type="button" class="secondary" :disabled="pending" @click="saveDraft">Сохранить черновик</button>
+                <button v-if="user" type="button" class="secondary" :disabled="pending" @click="templateDialog.showModal()">Сохранить как шаблон</button>
+            </div>
+        </header>
+        <router-link v-if="followUps.changes.length || followUps.expiring.length || followUps.stale.length || followUps.overdue.length" class="work-alert" to="/today">
+            <strong>Требуют внимания</strong><span>Правки: {{ followUps.changes.length }} · Истекают: {{ followUps.expiring.length }} · Черновики: {{ followUps.stale.length }} · Оплаты: {{ followUps.overdue.length }}</span>
+        </router-link>
+        <details v-if="versions.get(draft.revision_of)?.revision_requested_at" class="panel revision-note">
+            <summary>Запрос правок к {{ proposalNumber(draft.revision_of) }}</summary>
+            <p v-if="versions.get(draft.revision_of).revision_comment">{{ versions.get(draft.revision_of).revision_comment }}</p>
+            <ul v-if="versions.get(draft.revision_of).line_feedback?.length">
+                <li v-for="note in versions.get(draft.revision_of).line_feedback" :key="note.index"><strong>{{ versions.get(draft.revision_of).snapshot.lines[note.index].name }}</strong> · {{ note.comment }}</li>
+            </ul>
+        </details>
+        <div class="workspace">
+            <form id="proposal-form" class="editor" @submit.prevent="openReview">
+                <section class="panel">
+                    <h2>Реквизиты</h2>
+                    <label>Название проекта<input v-model.trim="draft.title" required maxlength="120"></label>
+                    <label v-if="records.contractors.length" class="catalog">Профиль подрядчика
+                        <select @change="selectContractor($event.target.value); $event.target.value = ''"><option value="">Выбрать профиль</option><option v-for="item in records.contractors" :key="item.id" :value="item.id">{{ item.data.name }}</option></select>
+                    </label>
+                    <label v-if="records.clients.length" class="catalog">Заказчик из справочника
+                        <select @change="selectClient($event.target.value); $event.target.value = ''"><option value="" selected>Выбрать заказчика</option><option v-for="item in records.clients" :key="item.id" :value="item.id">{{ item.data.name }}</option></select>
+                    </label>
+                    <div class="fields">
+                        <label>Подрядчик<input v-model.trim="draft.sender" required maxlength="100"></label>
+                        <label>Заказчик<input v-model.trim="draft.client" @input="draft.client_record_id = null" required maxlength="100"></label>
+                        <label>Реквизиты подрядчика<input v-model.trim="draft.sender_details" maxlength="240" placeholder="ИНН, ОГРН или ОГРНИП, адрес"></label>
+                        <label>Реквизиты заказчика<input v-model.trim="draft.client_details" maxlength="240" placeholder="ИНН, ОГРН или ОГРНИП, адрес"></label>
+                        <label>Контакты подрядчика<input v-model.trim="draft.sender_contact" maxlength="180" placeholder="Почта или телефон"></label>
+                    </div>
+                </section>
+                <section class="panel">
+                    <div class="section-title">
+                        <h2>Позиции</h2>
+                        <div class="editor-actions">
+                            <button type="button" class="secondary" @click="error = ''; importResult = null; importDialog.showModal()">Импорт CSV</button>
+                            <button type="button" class="secondary" :disabled="draft.lines.length >= 30" @click="addLine()">+ Позиция</button>
+                        </div>
+                    </div>
+                    <div v-for="(row, index) in draft.lines" :key="row.id" class="line">
+                        <label>Наименование<input v-model.trim="row.name" required maxlength="120" placeholder="Название услуги"></label>
+                        <label>Ед.<input v-model.trim="row.unit" maxlength="16" placeholder="усл."></label>
+                        <label>Кол-во<input v-model.number="row.quantity" type="number" min="1" max="999" required></label>
+                        <label>Цена, ₽<input v-model.trim="row.price" inputmode="decimal" maxlength="16" placeholder="18 000,44" required></label>
+                        <button type="button" class="secondary remove" :aria-label="'Удалить позицию ' + (index + 1)" :disabled="draft.lines.length === 1" @click="draft.lines.splice(index, 1)">×</button>
+                        <label v-if="draft.stages.length" class="line-stage">Этап<select v-model="row.stage"><option :value="null">Без этапа</option><option v-for="stage in draft.stages" :key="stage.key" :value="stage.key">{{ stage.name || 'Без названия' }}</option></select></label>
+                    </div>
+                    <label v-if="catalog.length" class="catalog">Из каталога
+                        <select :disabled="draft.lines.length >= 30" @change="addLine(catalog[Number($event.target.value)]); $event.target.value = ''">
+                            <option value="" disabled selected>Выбрать услугу</option>
+                            <option v-for="(item, index) in catalog" :key="item.name" :value="index">{{ item.name }} · {{ formatMoney(unitPrice(item)) }}</option>
+                        </select>
+                    </label>
+                    <label v-if="records.services.length" class="catalog">Услуга из моего справочника
+                        <select :disabled="draft.lines.length >= 30" @change="addLine(records.services[Number($event.target.value)].data); $event.target.value = ''">
+                            <option value="" disabled selected>Выбрать услугу</option>
+                            <option v-for="(item, index) in records.services" :key="item.id" :value="index">{{ item.data.name }} · {{ formatMoney(unitPrice(item.data)) }} / {{ item.data.unit }}</option>
+                        </select>
+                    </label>
+                </section>
+                <section class="panel">
+                    <div class="section-title"><h2>Этапы работ</h2><button type="button" class="secondary" :disabled="draft.stages.length >= 10" @click="addStage">Добавить этап</button></div>
+                    <p v-if="!draft.stages.length" class="muted">Добавьте этап, чтобы распределить работы и указать срок.</p>
+                    <div v-for="(stage, index) in draft.stages" :key="stage.key" class="stage-fields">
+                        <label>Название этапа<input v-model.trim="stage.name" required maxlength="100"></label>
+                        <label>Завершить по<input v-model="stage.due_on" type="date" :min="draft.starts_on || undefined" :max="draft.ends_on || undefined"></label>
+                        <div class="editor-actions">
+                            <button type="button" class="secondary" aria-label="Переместить этап выше" :disabled="index === 0" @click="moveStage(index, -1)">↑</button>
+                            <button type="button" class="secondary" aria-label="Переместить этап ниже" :disabled="index === draft.stages.length - 1" @click="moveStage(index, 1)">↓</button>
+                            <button type="button" class="secondary" @click="removeStage(stage)">Убрать</button>
+                        </div>
+                    </div>
+                </section>
+                <section class="panel terms">
+                    <h2>Условия</h2>
+                    <div class="fields">
+                        <label>Вид цены<select v-model="draft.price_type" aria-describedby="price-help"><option value="fixed">Твёрдая (фиксированная)</option><option value="approximate">Приблизительная</option></select>
+                            <small id="price-help">По общему правилу твёрдая цена не меняется в одностороннем порядке (ст. 709 ГК РФ).</small>
+                        </label>
+                        <label>Действительно по<input v-model="draft.valid_until" type="date"></label>
+                        <label>Скидка, %<input v-model.number="draft.discount" type="number" min="0" max="100" required></label>
+                        <label v-if="!draft.payments.length">Аванс по договору, %<input v-model.number="draft.advance_percent" type="number" min="0" max="100"></label>
+                        <label>Основание<input v-model.trim="draft.basis" maxlength="180" placeholder="Номер договора или заявки"></label>
+                        <label>Начало работ<input v-model="draft.starts_on" type="date" :required="Boolean(draft.ends_on)"></label>
+                        <label>Окончание работ<input v-model="draft.ends_on" type="date" :min="draft.starts_on || undefined" :required="Boolean(draft.starts_on)"></label>
+                    </div>
+                    <label>Комментарий для клиента<textarea v-model.trim="draft.notes" maxlength="1500" rows="3"></textarea></label>
+                </section>
+                <section class="panel financial-panel">
+                    <h2>НДС и платежи</h2>
+                    <div class="fields">
+                        <label>Режим НДС<select v-model="draft.vat_mode">
+                            <option value="none">Без НДС</option><option value="added">НДС сверху</option><option value="included">НДС включён в цену</option>
+                        </select></label>
+                        <label v-if="draft.vat_mode !== 'none'">Ставка<select v-model="draft.vat_rate" required>
+                            <option value="" disabled>Выберите ставку</option><option v-for="rate in [22, 10, 7, 5, 0, 20]" :key="rate" :value="rate">{{ rate }}%{{ rate === 20 ? ' · для прежних периодов' : '' }}</option>
+                        </select></label>
+                    </div>
+                    <small class="field-hint">Выберите режим и ставку по условиям сделки. Скидка применяется до расчёта налога.</small>
+                    <div class="section-title payment-heading">
+                        <h3>График платежей</h3><button type="button" class="secondary" :disabled="draft.payments.length >= 12" @click="addPayment">Добавить платёж</button>
+                    </div>
+                    <p v-if="draft.payments.length" class="payment-share" :class="{ complete: preview.share === 100 }" aria-live="polite">Распределено {{ preview.share }} из 100%</p>
+                    <div v-for="(payment, index) in draft.payments" :key="payment.id" class="payment-row">
+                        <label>Условие<input v-model.trim="payment.label" required maxlength="120" placeholder="После сдачи дизайна"></label>
+                        <label>Доля, %<input v-model.number="payment.percent" type="number" min="1" max="100" required></label>
+                        <label>Оплатить по<input v-model="payment.due_on" type="date"></label>
+                        <button type="button" class="secondary" :aria-label="'Удалить платёж ' + (index + 1)" @click="draft.payments.splice(index, 1)">×</button>
+                    </div>
+                </section>
+            </form>
+            <aside class="preview">
+                <div class="preview-bar">
+                    <div><h2>Предпросмотр</h2><small v-if="draftSaved && !user">Черновик сохранён в браузере</small></div>
+                    <button class="primary" form="proposal-form" :disabled="pending || !sessionReady">Проверить перед выпуском</button>
+                </div>
+                <div v-if="issued" class="share panel" role="status">
+                    <label>Ссылка на {{ proposalNumber(issued.id) }}<input ref="shareField" :value="shareUrl" readonly></label>
+                    <div class="actions">
+                        <button type="button" class="secondary" @click="copyLink">{{ copied ? 'Скопировано' : 'Копировать' }}</button>
+                        <router-link :to="'/p/' + issued.token">Открыть предложение</router-link>
+                        <a :href="pdfUrl(issued)">Скачать PDF</a>
+                        <a :href="xlsxUrl(issued)">Скачать Excel</a>
+                    </div>
+                </div>
+                <proposal-document :data="preview"></proposal-document>
+            </aside>
+        </div>
+    </template>
+    <template v-else-if="page === '/workspace'">
+        <header class="heading"><div><h1>Кабинет</h1><p>Черновики, заказчики и услуги в одном месте.</p></div></header>
+        <p v-if="!sessionReady">Загружаем кабинет…</p>
+        <section v-else-if="!user" class="panel">
+            <p>Войдите, чтобы сохранять черновики и справочники в своём кабинете.</p>
+            <button type="button" class="primary" @click="error = ''; accountDialog.showModal()">Войти или зарегистрироваться</button>
+        </section>
+        <div v-else class="workspace-panels">
+            <section v-if="clientCard" class="panel client-card">
+                <div class="section-title"><h2>{{ clientCard.data.name }}</h2><button class="secondary" type="button" @click="activeClient = null">Закрыть карточку</button></div>
+                <p>{{ clientCard.data.details || 'Реквизиты не заполнены.' }}</p>
+                <h3>Выпущенные сметы</h3>
+                <p v-if="!clientProposals.length">Связанных смет пока нет.</p>
+                <div v-for="item in clientProposals" :key="item.id" class="record-row">
+                    <router-link :to="'/p/' + item.token">{{ proposalNumber(item.id) }} · {{ item.snapshot.title }}</router-link>
+                    <strong>{{ formatMoney(item.snapshot.total) }}</strong><span class="badge" :data-status="item.status">{{ statusNames[item.status] }}</span>
+                </div>
+                <h3>Черновики</h3>
+                <p v-if="!clientDrafts.length">Связанных черновиков пока нет.</p>
+                <div v-for="item in clientDrafts" :key="item.id" class="record-row">
+                    <span>{{ item.data.title || 'Без названия' }}</span><button class="secondary" type="button" @click="openDraft(item)">Открыть</button>
+                </div>
+            </section>
+            <section class="panel">
+                <div class="section-title"><h2>Шаблоны</h2><router-link to="/">Открыть редактор</router-link></div>
+                <p v-if="!records.templates.length">Сохраните типовую смету как шаблон из редактора.</p>
+                <article v-for="item in records.templates" :key="item.id" class="record-row">
+                    <div><strong>{{ item.data.template_name }}</strong><small>Позиций: {{ item.data.lines.length }}</small></div>
+                    <div class="editor-actions"><button type="button" class="secondary" :disabled="pending" @click="useTemplate(item)">Применить</button><button type="button" class="secondary" :disabled="pending" @click="removeRecord('templates', item)">Удалить</button></div>
+                </article>
+            </section>
+            <section class="panel">
+                <div class="section-title"><h2>Черновики</h2><button class="secondary" type="button" :disabled="pending" @click="newDraft">Новый черновик</button></div>
+                <p v-if="!records.drafts.length">Сохранённых черновиков пока нет. <router-link to="/">Открыть редактор</router-link></p>
+                <article v-for="item in records.drafts" :key="item.id" class="record-row">
+                    <span>{{ item.data.title || 'Без названия' }}</span>
+                    <div class="editor-actions"><button type="button" class="secondary" :disabled="pending" @click="openDraft(item)">Открыть</button><button type="button" class="secondary" :disabled="pending" @click="removeRecord('drafts', item)">Удалить</button></div>
+                </article>
+            </section>
+            <section v-for="(heading, kind) in { clients: 'Заказчики', services: 'Услуги', contractors: 'Профили подрядчика' }" :key="kind" class="panel">
+                <div class="section-title"><h2>{{ heading }}</h2><button class="secondary" type="button" @click="editing[kind] = kind === 'services' ? { name: '', unit: 'усл.', price: 0 } : { name: '', details: '', contact: '' }">Добавить</button></div>
+                <form v-if="editing[kind]" class="record-form fields" @submit.prevent="saveRecord(kind, editing[kind])">
+                    <label>Название<input v-model.trim="editing[kind].name" required :maxlength="kind === 'services' ? 120 : 100"></label>
+                    <template v-if="kind !== 'services'">
+                        <label>Реквизиты<input v-model.trim="editing[kind].details" maxlength="240"></label>
+                        <label v-if="kind === 'contractors'">Контакты<input v-model.trim="editing[kind].contact" maxlength="180"></label>
+                    </template>
+                    <template v-else>
+                        <label>Единица<input v-model.trim="editing[kind].unit" required maxlength="16"></label>
+                        <label>Цена, ₽<input v-model.trim="editing[kind].price" inputmode="decimal" maxlength="16" required></label>
+                        <label>Категория в Telegram<input v-model.trim="editing[kind].mini_category" maxlength="60"></label>
+                        <label>Описание в Telegram<input v-model.trim="editing[kind].mini_description" maxlength="240"></label>
+                        <label class="inline-check"><input type="checkbox" :checked="editing[kind].mini_visible !== false && editing[kind].mini_visible !== 0" @change="editing[kind].mini_visible = $event.target.checked"> Показывать в мини-приложении</label>
+                    </template>
+                    <div class="editor-actions"><button class="primary" :disabled="pending">Сохранить</button><button type="button" class="secondary" @click="delete editing[kind]">Отмена</button></div>
+                </form>
+                <p v-if="!records[kind].length && !editing[kind]">Справочник пока пуст.</p>
+                <article v-for="item in records[kind]" :key="item.id" class="record-row">
+                    <div><strong>{{ item.data.name }}</strong><small>{{ kind === 'services' ? formatMoney(unitPrice(item.data)) + ' / ' + item.data.unit : item.data.details }}</small><small v-if="kind === 'contractors' && item.data.contact">{{ item.data.contact }}</small></div>
+                    <div class="editor-actions"><button v-if="kind === 'clients'" type="button" class="secondary" @click="openClientCard(item)">Карточка</button><button type="button" class="secondary" :disabled="pending" @click="editing[kind] = { ...item.data, id: item.id, version: item.version }">Изменить</button><button type="button" class="secondary" :disabled="pending" @click="removeRecord(kind, item)">Удалить</button></div>
+                </article>
+            </section>
+        </div>
+    </template>
+    <template v-else-if="page === '/history'">
+        <header class="heading"><div><h1>{{ archiveView ? 'Архив' : 'Предложения' }}</h1><p>{{ user ? 'Выпущенные документы вашего кабинета.' : 'Документы, созданные в этой сессии.' }}</p></div>
+            <button type="button" class="secondary" @click="archiveView = !archiveView; statusFilter = 'all'; query = ''">{{ archiveView ? 'К предложениям' : 'Открыть архив' }}</button>
+        </header>
+        <p v-if="loading">Загружаем предложения…</p>
+        <div v-else-if="!history.length && !error" class="panel">Здесь появятся отправленные предложения. <router-link to="/">Открыть редактор</router-link></div>
+        <div v-else-if="history.length" class="panel history">
+            <div class="status-filters" role="group" aria-label="Статус предложения">
+                <button type="button" class="secondary" :aria-pressed="statusFilter === 'all'" @click="statusFilter = 'all'">Все <span>{{ visibleHistory.length }}</span></button>
+                <button v-for="(label, key) in statusLabels" :key="key" type="button" class="secondary" :aria-pressed="statusFilter === key" @click="statusFilter = key">{{ label }} <span>{{ counts[key] }}</span></button>
+            </div>
+            <label class="history-search">Поиск<input v-model="query" type="search" placeholder="Проект, клиент или номер"></label>
+            <p v-if="!visibleHistory.length" class="search-empty">{{ archiveView ? 'Архив пуст.' : 'Все предложения в архиве.' }}</p>
+            <p v-else-if="!filteredHistory.length" class="search-empty">По этому запросу ничего не найдено.</p>
+            <article v-for="item in filteredHistory" :key="item.id" class="history-row">
+                <div><router-link :to="'/p/' + item.token">{{ item.snapshot.title }}</router-link><small>{{ proposalNumber(item.id) }} · {{ item.snapshot.client }}<template v-if="item.revision_of"> · Версия {{ proposalNumber(item.revision_of) }}</template></small></div>
+                <strong>{{ formatMoney(item.snapshot.total) }}<small v-if="item.payment_summary?.paid">Оплачено {{ formatMoney(item.payment_summary.paid) }}</small></strong>
+                <span class="badge" :data-status="item.status">{{ statusNames[item.status] }}</span>
+                <div class="history-actions">
+                    <a :href="pdfUrl(item)">PDF</a>
+                    <a :href="xlsxUrl(item)">Excel</a>
+                    <button type="button" class="secondary" :disabled="pending" @click="openReceipts(item)">Оплаты</button>
+                    <button type="button" class="secondary" :disabled="pending" @click="duplicate(item)">Новая версия</button>
+                    <button v-if="!item.archived_at && ['pending', 'changes'].includes(item.status)" type="button" class="secondary" :disabled="pending" @click="withdraw(item)">Отозвать</button>
+                    <button type="button" class="secondary" :disabled="pending" @click="toggleArchive(item)">{{ item.archived_at ? 'Восстановить' : 'В архив' }}</button>
+                </div>
+                <details v-if="item.revision_requested_at" class="version-details"><summary>Запрос правок</summary>
+                    <p v-if="item.revision_comment" class="client-comment">{{ item.revision_comment }}</p>
+                    <ul v-if="item.line_feedback?.length" class="feedback-lines"><li v-for="note in item.line_feedback" :key="note.index"><strong>{{ item.snapshot.lines[note.index].name }}</strong> · {{ note.comment }}</li></ul>
+                </details>
+                <details class="version-details"><summary>Журнал событий</summary>
+                    <ol class="event-list"><li v-for="(event, index) in events(item)" :key="index">
+                        <time>{{ dateTime(event.at) }} МСК</time>
+                        <router-link v-if="event.token" :to="'/p/' + event.token">{{ event.label }}</router-link><strong v-else>{{ event.label }}</strong>
+                        <p v-if="event.note">{{ event.note }}</p>
+                    </li></ol>
+                </details>
+                <details v-if="item.revision_of && versions.has(item.revision_of)" class="version-details">
+                    <summary>Что изменилось относительно {{ proposalNumber(item.revision_of) }}</summary>
+                    <router-link :to="'/p/' + versions.get(item.revision_of).token">Открыть исходную смету</router-link>
+                    <p v-if="!changes(item).length">Условия и суммы совпадают.</p>
+                    <dl v-else><div v-for="change in changes(item)" :key="change.label"><dt>{{ change.label }}</dt><dd>{{ change.before }} → {{ change.after }}</dd></div></dl>
+                </details>
+            </article>
+        </div>
+    </template>
+    <template v-else-if="page === '/telegram-inbox'">
+        <header class="heading"><div><h1>Заявки из Telegram</h1><p>Подбор услуг и переписка с клиентами.</p></div>
+            <div class="editor-actions"><a class="secondary" href="/mini" target="_blank" rel="noopener">Открыть мини-приложение</a><button v-if="user" type="button" class="secondary" :disabled="pending" @click="refreshTelegram">Обновить</button></div>
+        </header>
+        <p v-if="loading">Загружаем обращения…</p>
+        <section v-else-if="!user" class="panel"><button class="primary" @click="accountDialog.showModal()">Войти в кабинет</button></section>
+        <section v-else-if="!telegramInbox.length" class="panel"><p>Новых обращений пока нет.</p></section>
+        <div v-else class="workspace-panels">
+            <details v-for="item in telegramInbox" :key="item.id" class="panel telegram-ticket" @toggle="telegramReplies[item.id] ||= { comment: '', proposal_id: '' }">
+                <summary><strong>{{ item.subject }} № {{ item.id }}</strong><span>{{ item.customer }}</span><span class="badge">{{ item.share_token ? 'Смета отправлена' : 'В работе' }}</span></summary>
+                <p v-if="item.items.length" class="field-hint">{{ item.items.map(row => row.name + ' × ' + row.quantity).join(', ') }}</p>
+                <p v-for="message in item.messages" :key="message.id" class="client-comment"><strong>{{ message.from_operator ? 'Подрядчик' : 'Клиент' }} · {{ dateTime(message.created_at) }}</strong><br>{{ message.body }}</p>
+                <div class="editor-actions">
+                    <button v-if="records.drafts.find(row => row.id === item.draft_id)" type="button" class="secondary" @click="openDraft(records.drafts.find(row => row.id === item.draft_id))">Открыть черновик</button>
+                    <router-link v-if="item.share_token" :to="'/p/' + item.share_token">Открыть отправленную смету</router-link>
+                </div>
+                <form v-if="telegramReplies[item.id]" class="dialog-fields telegram-reply" @submit.prevent="replyTelegram(item)">
+                    <label>Ответ клиенту<textarea v-model.trim="telegramReplies[item.id].comment" maxlength="1500" rows="3"></textarea></label>
+                    <label>Приложить смету<select v-model="telegramReplies[item.id].proposal_id"><option value="">Без сметы</option>
+                        <option v-for="proposal in history.filter(row => !row.archived_at && !['withdrawn', 'expired'].includes(row.status))" :key="proposal.id" :value="proposal.id">{{ proposalNumber(proposal.id) }} · {{ proposal.snapshot.title }} · {{ proposal.snapshot.client }}</option>
+                    </select></label>
+                    <button class="primary" :disabled="pending || (!telegramReplies[item.id].comment && !telegramReplies[item.id].proposal_id)">Ответить клиенту</button>
+                </form>
+            </details>
+        </div>
+    </template>
+    <template v-else-if="page === '/today'">
+        <header class="heading"><div><h1>Сегодня</h1><p>Сметы и черновики, которым нужно внимание.</p></div></header>
+        <p v-if="loading">Загружаем рабочий список…</p>
+        <div v-else class="today-grid">
+            <section v-for="(label, kind) in { changes: 'Запрошены правки', expiring: 'Истекают за 3 дня', overdue: 'Просроченные платежи', stale: 'Черновики без правок 7+ дней' }" :key="kind" class="panel">
+                <div class="section-title"><h2>{{ label }}</h2><span class="task-count">{{ followUps[kind].length }}</span></div>
+                <p v-if="!followUps[kind].length" class="muted">Всё спокойно.</p>
+                <article v-for="item in followUps[kind]" :key="item.id" class="task-row">
+                    <template v-if="kind === 'stale'"><button class="secondary" type="button" @click="openDraft(item)">{{ item.data.title || 'Без названия' }}</button></template>
+                    <template v-else><router-link :to="'/p/' + item.token">{{ item.snapshot.title }}</router-link>
+                        <small>{{ proposalNumber(item.id) }} · {{ item.snapshot.client }}<template v-if="kind === 'expiring'"> · по {{ item.snapshot.valid_until.split('-').reverse().join('.') }}</template></small>
+                        <button v-if="kind === 'changes'" class="secondary" type="button" @click="duplicate(item)">Создать версию</button>
+                        <button v-if="kind === 'overdue'" class="secondary" type="button" :disabled="pending" @click="openReceipts(item)">Открыть оплаты</button>
+                    </template>
+                </article>
+                <router-link v-if="kind === 'stale' && !user" to="/workspace">Войти в кабинет</router-link>
+            </section>
+        </div>
+    </template>
+    <template v-else-if="page.startsWith('/reset-password/')">
+        <header class="heading"><h1>Новый пароль</h1></header>
+        <form class="panel dialog-fields reset-panel" @submit.prevent="resetPassword">
+            <label>Почта<input v-model.trim="resetForm.email" type="email" required maxlength="255" autocomplete="username"></label>
+            <label>Новый пароль<input v-model="resetForm.password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
+            <label>Повтор пароля<input v-model="resetForm.password_confirmation" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
+            <button class="primary" :disabled="pending">Сохранить пароль</button>
+        </form>
+    </template>
+    <template v-else>
+        <p v-if="loading">Загружаем предложение…</p>
+        <div v-else-if="shared" class="client-view">
+            <div class="client-toolbar"><a class="secondary" :href="xlsxUrl(shared)">Скачать Excel</a><a class="primary" :href="pdfUrl(shared)">Скачать смету в PDF</a></div>
+            <proposal-document :data="shared.snapshot" :number="proposalNumber(shared.id)"></proposal-document>
+            <section class="panel">
+                <template v-if="shared.accepted_at">
+                    <h2>Предложение принято</h2>
+                    <p>Отклик оставил(а) {{ shared.accepted_by }}. Подписание сметы стороны оформляют отдельно.</p>
+                </template>
+                <p v-else-if="shared.status === 'withdrawn'">Подрядчик отозвал это предложение.</p>
+                <p v-else-if="shared.expired">Срок действия этого предложения истёк.</p>
+                <form v-else class="approval" @submit.prevent="accept">
+                    <label>Ваше имя<input v-model.trim="clientName" required maxlength="100" autocomplete="name"></label>
+                    <button class="primary" :disabled="pending">Сообщить о согласии</button>
+                    <small class="approval-note">Сервис сохранит ваше имя и время отклика. Подписание сметы стороны оформляют отдельно.</small>
+                </form>
+                <p v-if="shared.revision_comment" class="client-comment"><strong>Запрос правок</strong><br>{{ shared.revision_comment }}</p>
+                <ul v-if="shared.line_feedback?.length" class="feedback-lines"><li v-for="note in shared.line_feedback" :key="note.index"><strong>{{ shared.snapshot.lines[note.index].name }}</strong> · {{ note.comment }}</li></ul>
+                <details v-if="shared.status === 'pending'" class="change-request">
+                    <summary>Запросить правки</summary>
+                    <form class="dialog-fields" @submit.prevent="requestChanges">
+                        <label>Общий комментарий<textarea v-model.trim="changeComment" maxlength="1500" rows="3"></textarea></label>
+                        <details v-for="(position, index) in shared.snapshot.lines" :key="index" class="line-feedback">
+                            <summary>Позиция {{ index + 1 }} · {{ position.name }}</summary>
+                            <label>Комментарий к позиции<textarea v-model.trim="lineComments[index]" maxlength="500" rows="2"></textarea></label>
+                        </details>
+                        <small>Комментарий виден всем, у кого есть ссылка на смету.</small>
+                        <button class="secondary" :disabled="pending">Отправить комментарий</button>
+                    </form>
+                </details>
+            </section>
+        </div>
+    </template>
+</main>
+<dialog ref="accountDialog" class="panel workspace-dialog" aria-labelledby="account-title">
+    <div class="section-title"><h2 id="account-title">{{ forgot ? 'Восстановить доступ' : register ? 'Создать кабинет' : 'Войти в кабинет' }}</h2><button class="secondary" type="button" @click="accountDialog.close()">Закрыть</button></div>
+    <p v-if="error" class="feedback error" role="alert">{{ error }}</p>
+    <form class="dialog-fields" @submit.prevent="authenticate">
+        <label v-if="register && !forgot">Имя<input v-model.trim="accountForm.name" required maxlength="100" autocomplete="name"></label>
+        <label>Почта<input v-model.trim="accountForm.email" type="email" required maxlength="255" autocomplete="username"></label>
+        <label v-if="!forgot">Пароль<input v-model="accountForm.password" type="password" required :minlength="register ? 8 : undefined" maxlength="128" :autocomplete="register ? 'new-password' : 'current-password'"></label>
+        <div class="editor-actions"><button class="primary" :disabled="pending">{{ forgot ? 'Отправить ссылку' : register ? 'Зарегистрироваться' : 'Войти' }}</button><button class="secondary" type="button" :disabled="pending" @click="register = forgot ? false : !register; forgot = false; error = ''">{{ register || forgot ? 'Вернуться ко входу' : 'Создать кабинет' }}</button></div>
+        <button v-if="!register && !forgot" type="button" class="secondary" @click="forgot = true; error = ''">Забыли пароль?</button>
+    </form>
+</dialog>
+<dialog ref="receiptsDialog" class="panel review-dialog" aria-labelledby="receipt-title">
+    <div class="section-title"><h2 id="receipt-title">Оплаты {{ receiptItem ? proposalNumber(receiptItem.id) : '' }}</h2><button type="button" class="secondary" :disabled="pending" @click="receiptsDialog.close()">Закрыть</button></div>
+    <p v-if="error" role="alert" class="feedback error">{{ error }}</p>
+    <template v-if="receiptData">
+        <dl class="receipt-totals"><div><dt>Поступило</dt><dd>{{ formatMoney(receiptData.summary.paid) }}</dd></div><div><dt>Остаток по смете</dt><dd>{{ formatMoney(receiptData.summary.remaining) }}</dd></div></dl>
+        <div class="receipt-schedule"><table><thead><tr><th>Платёж</th><th>Срок</th><th>Остаток</th></tr></thead><tbody>
+            <tr v-for="(payment, index) in receiptData.summary.schedule" :key="index">
+                <td>{{ payment.label }}<small v-if="payment.overdue" class="late">Просрочен по графику</small></td><td>{{ payment.due_on?.split('-').reverse().join('.') || 'По условию' }}</td><td>{{ formatMoney(payment.remaining) }}</td>
+            </tr>
+        </tbody></table></div>
+        <form v-if="receiptData.summary.remaining > 0" class="fields" @submit.prevent="saveReceipt">
+            <label>К какому платежу<select v-model="receiptInput.index" required><option :value="-1" disabled>Выберите платёж</option><option v-for="(payment, index) in receiptData.summary.schedule" :key="index" :value="index" :disabled="!payment.remaining">{{ payment.label }}</option></select></label>
+            <label>Сумма, ₽<input v-model.trim="receiptInput.amount" inputmode="decimal" maxlength="24" required></label>
+            <label>Дата поступления<input v-model="receiptInput.paid_on" type="date" required></label>
+            <label>Номер или примечание<input v-model.trim="receiptInput.reference" maxlength="120" placeholder="Платёжное поручение № 123"></label>
+            <button class="primary" :disabled="pending || receiptInput.index < 0">Записать оплату</button>
+        </form>
+        <h3 v-if="receiptData.rows.length">Поступления</h3>
+        <div v-for="entry in receiptData.rows" :key="entry.id" class="record-row">
+            <div><strong>{{ formatMoney(entry.amount) }}</strong><small>{{ entry.paid_on.split('-').reverse().join('.') }} · {{ receiptData.summary.schedule[entry.payment_index]?.label }}</small><small v-if="entry.reference">{{ entry.reference }}</small></div>
+            <span v-if="entry.voided_at" class="badge">Запись отменена</span>
+            <button v-else type="button" class="secondary" :disabled="pending" @click="voidReceipt(entry)">Отменить запись</button>
+        </div>
+    </template>
+</dialog>
+<dialog ref="importDialog" class="panel review-dialog" aria-labelledby="import-title">
+    <div class="section-title"><h2 id="import-title">Импорт позиций из CSV</h2><button type="button" class="secondary" @click="importDialog.close()">Закрыть</button></div>
+    <p v-if="error" role="alert" class="feedback error">{{ error }}</p>
+    <p class="field-hint">Сохраните таблицу как CSV. Заголовки: Наименование;Единица;Количество;Цена.</p>
+    <label>Файл CSV<input type="file" accept=".csv,text/csv" :disabled="pending" @change="inspectImport($event.target.files[0]); $event.target.value = ''"></label>
+    <template v-if="importResult">
+        <ul v-if="importResult.errors.length" class="review-warnings"><li v-for="message in importResult.errors" :key="message">{{ message }}</li></ul>
+        <p v-if="!importResult.lines.length" class="field-hint">В файле нет подходящих позиций.</p>
+        <div v-else class="import-table"><table><thead><tr><th>Наименование</th><th>Количество</th><th>Цена</th></tr></thead>
+            <tbody><tr v-for="(row, index) in importResult.lines" :key="index"><td>{{ row.name }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ formatMoney(unitPrice(row)) }}</td></tr></tbody></table></div>
+        <p v-if="importBase + importResult.lines.length > 30" class="field-hint">После импорта получится больше 30 позиций.</p>
+        <button type="button" class="primary" :disabled="pending || importResult.errors.length > 0 || !importResult.lines.length || importBase + importResult.lines.length > 30" @click="applyImport">Добавить позиции</button>
+    </template>
+</dialog>
+<dialog ref="templateDialog" class="panel workspace-dialog" aria-labelledby="template-title">
+    <div class="section-title"><h2 id="template-title">Новый шаблон</h2><button type="button" class="secondary" @click="templateDialog.close()">Закрыть</button></div>
+    <form class="dialog-fields" @submit.prevent="saveTemplate">
+        <p v-if="error" role="alert" class="feedback error">{{ error }}</p>
+        <label>Название шаблона<input v-model.trim="templateName" maxlength="100" required></label>
+        <p>В шаблон войдут работы, этапы и условия оплаты. Заказчика можно будет выбрать после применения.</p>
+        <button class="primary" :disabled="pending">Сохранить шаблон</button>
+    </form>
+</dialog>
+<dialog ref="reviewDialog" class="panel review-dialog" aria-labelledby="review-title">
+    <div class="section-title"><h2 id="review-title">Проверка перед выпуском</h2><button type="button" class="secondary" :disabled="pending" @click="reviewDialog.close()">Вернуться к редактору</button></div>
+    <template v-if="review">
+        <ul v-if="review.warnings.length" class="review-warnings"><li v-for="warning in review.warnings" :key="warning">{{ warning }}</li></ul>
+        <p v-if="reviewError" class="feedback error" role="alert">{{ reviewError }}</p>
+        <proposal-document :data="review.snapshot" number="Предпросмотр для клиента"></proposal-document>
+        <button type="button" class="primary" :disabled="pending" @click="issue">Выпустить и скопировать ссылку</button>
+    </template>
+</dialog>

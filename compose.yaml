@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8094:8094"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY:?Set APP_KEY in .env}
+      APP_URL: http://127.0.0.1:8094
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_DATABASE: estimate
+      DB_USERNAME: estimate
+      DB_PASSWORD: ${ESTIMATE_DB_PASSWORD:-estimate-local}
+      MAIL_MAILER: smtp
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+      MAIL_FROM_ADDRESS: smeta@example.test
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["sh", "-ec", "php artisan migrate --force && exec php -S 0.0.0.0:8094 -t public"]
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: estimate
+      MYSQL_USER: estimate
+      MYSQL_PASSWORD: ${ESTIMATE_DB_PASSWORD:-estimate-local}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - estimate-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "127.0.0.1:8025:8025"
+volumes:
+  estimate-data:

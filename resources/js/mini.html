@@ -1,0 +1,76 @@
+<header class="mini-header">
+    <div class="mini-brand"><span class="mark">С</span><div><strong>Смета</strong><small>Подбор услуг</small></div></div>
+</header>
+<nav class="mini-nav" aria-label="Разделы">
+    <button :aria-pressed="page === 'catalog'" @click="tab('catalog')">Услуги</button>
+    <button :aria-pressed="page === 'cart'" @click="tab('cart')">Заявка <span v-if="positions.length">{{ positions.length }}</span></button>
+    <button :aria-pressed="page === 'requests'" @click="tab('requests')">Поддержка</button>
+</nav>
+<p v-if="error" class="mini-error" role="alert">{{ error }}</p>
+<p v-if="notice" class="mini-note" role="status">{{ notice }}</p>
+<section v-if="page === 'catalog'">
+    <div class="intro">
+        <h1>Услуги для вашего сайта</h1>
+        <p>Соберите заявку и получите смету от подрядчика.</p>
+        <button v-if="visible.length" class="primary" @click="bundle">Подобрать набор для запуска</button>
+    </div>
+    <div v-if="categories.length > 1" class="categories" aria-label="Категории">
+        <button :aria-pressed="!category" @click="category = ''">Все</button>
+        <button v-for="item in categories" :key="item" :aria-pressed="category === item" @click="category = item">{{ item }}</button>
+    </div>
+    <p v-if="pending && !visible.length" role="status">Загружаем услуги…</p>
+    <article v-for="item in visible" :key="item.id" class="service">
+        <div><h2>{{ item.name }}</h2><p>{{ item.description }}</p></div>
+        <div class="service-bottom">
+            <span><strong>{{ format(cents(item.price)) }}</strong><small>за {{ item.unit }}</small></span>
+            <button class="secondary" @click="ask(item)">Спросить</button>
+            <button class="primary" @click="change(item, (cart[item.id] || 0) + 1)">{{ cart[item.id] ? '+ Ещё (' + cart[item.id] + ')' : 'Добавить' }}</button>
+        </div>
+    </article>
+</section>
+<section v-else-if="page === 'cart'">
+    <h1>Моя заявка</h1>
+    <template v-if="positions.length">
+        <article v-for="item in positions" :key="item.id" class="service cart-row">
+            <div><h2>{{ item.name }}</h2><p>{{ format(item.total) }}</p></div>
+            <div class="quantity"><button class="secondary" :aria-label="'Уменьшить: ' + item.name" @click="change(item, item.quantity - 1)">−</button><span>{{ item.quantity }}</span><button class="secondary" :aria-label="'Увеличить: ' + item.name" @click="change(item, item.quantity + 1)">+</button></div>
+        </article>
+        <form class="service action-form" @submit.prevent="submitOrder">
+            <div class="total"><span>Предварительно</span><strong>{{ format(total) }}</strong></div>
+            <label>Комментарий для подрядчика<textarea v-model.trim="orderNote" rows="3" maxlength="1500"></textarea></label>
+            <button class="primary" :disabled="pending">Отправить заявку</button>
+        </form>
+    </template>
+    <div v-else class="service"><p>В заявке пока нет услуг.</p><button class="primary" @click="tab('catalog')">К услугам</button></div>
+</section>
+<section v-else>
+    <div class="section-title"><h1>Поддержка</h1><button type="button" class="secondary" :disabled="pending" @click="tab('requests')">Обновить</button><button v-if="request" class="secondary" @click="selected = null">Все обращения</button></div>
+    <template v-if="request">
+        <div class="service">
+            <h2>{{ request.subject }} № {{ request.id }}</h2>
+            <p v-if="request.items.length">{{ request.items.map(item => item.name + ' × ' + item.quantity).join(', ') }}</p>
+            <a v-if="request.share_token" class="primary link" :href="'/p/' + request.share_token" target="_blank" rel="noopener">Открыть готовую смету</a>
+        </div>
+        <div v-if="request.messages.length" class="thread">
+            <article v-for="message in request.messages" :key="message.id" class="message" :class="{ operator: message.from_operator }">
+                <small>{{ message.from_operator ? 'Подрядчик' : 'Вы' }}</small><p>{{ message.body }}</p>
+            </article>
+        </div>
+        <form class="service action-form" @submit.prevent="sendReply">
+            <label>Сообщение<textarea v-model.trim="reply" rows="2" maxlength="1500" required></textarea></label>
+            <button class="primary" :disabled="pending">Отправить</button>
+        </form>
+    </template>
+    <template v-else>
+        <form class="service action-form" @submit.prevent="submitQuestion">
+            <label>Ваш вопрос<textarea v-model.trim="question" rows="3" maxlength="1500" required></textarea></label>
+            <button class="primary" :disabled="pending">Написать подрядчику</button>
+        </form>
+        <div v-if="requests.length" class="service">
+            <h2>Мои обращения</h2>
+            <button v-for="item in requests" :key="item.id" class="request-row" @click="selected = item.id; reply = ''">
+                <strong>{{ item.subject }} № {{ item.id }}</strong><small>{{ item.share_token ? 'Смета готова' : 'В работе' }}</small>
+            </button>
+        </div>
+    </template>
+</section>

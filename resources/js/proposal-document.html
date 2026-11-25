@@ -1,0 +1,41 @@
+<article class="paper">
+        <div class="paper-top"><span>Коммерческое предложение</span><span>{{ number || 'Черновик' }}</span></div>
+        <h2>{{ data.title || 'Название проекта' }}</h2>
+        <dl class="parties">
+            <div><dt>Подрядчик</dt><dd>{{ data.sender || '—' }}</dd><small v-if="data.sender_details">{{ data.sender_details }}</small><small v-if="data.sender_contact">{{ data.sender_contact }}</small></div>
+            <div><dt>Заказчик</dt><dd>{{ data.client || '—' }}</dd><small v-if="data.client_details">{{ data.client_details }}</small></div>
+        </dl>
+        <div v-if="data.price_type || data.valid_until || data.basis || (data.starts_on && data.ends_on)" class="document-meta">
+            <span v-if="data.price_type">Цена: {{ data.price_type === 'fixed' ? 'твёрдая' : 'приблизительная' }}</span>
+            <span v-if="data.valid_until">Действительно по {{ data.valid_until.split('-').reverse().join('.') }}</span>
+            <span v-if="data.basis">{{ data.basis }}</span>
+            <span v-if="data.starts_on && data.ends_on">Работы с {{ data.starts_on.split('-').reverse().join('.') }} по {{ data.ends_on.split('-').reverse().join('.') }}</span>
+        </div>
+        <table>
+            <thead><tr><th>Услуга</th><th>Кол-во</th><th>Сумма</th></tr></thead>
+            <tbody v-for="group in groups" :key="group.key">
+                <tr v-if="group.name || group.due_on" class="document-stage"><th scope="rowgroup" colspan="3">{{ group.name || 'Этап без названия' }}<template v-if="group.due_on"> · по {{ group.due_on.split('-').reverse().join('.') }}</template><template v-if="group.subtotal !== undefined"> · {{ formatMoney(group.subtotal) }} до скидки</template></th></tr>
+                <tr v-for="(line, index) in group.lines" :key="index"><td>{{ line.name || 'Новая позиция' }}<small>{{ formatMoney(unitPrice(line)) }} за {{ line.unit || 'ед.' }}</small></td><td>{{ line.quantity }} {{ line.unit || 'ед.' }}</td><td>{{ formatMoney(line.amount) }}</td></tr>
+            </tbody>
+        </table>
+        <dl class="totals">
+            <div><dt>Подытог</dt><dd>{{ formatMoney(data.subtotal) }}</dd></div>
+            <div v-if="data.discount_amount"><dt>Скидка {{ data.discount }}%</dt><dd>-{{ formatMoney(data.discount_amount) }}</dd></div>
+            <template v-if="['added', 'included'].includes(data.vat_mode)">
+                <div><dt>База без НДС</dt><dd>{{ formatMoney(data.vat_base) }}</dd></div>
+                <div><dt>{{ data.vat_mode === 'included' ? 'В том числе НДС' : 'НДС' }} {{ data.vat_rate }}%</dt><dd>{{ formatMoney(data.vat_amount) }}</dd></div>
+            </template>
+            <div v-else-if="data.vat_mode === 'none'"><dt>НДС</dt><dd>Без НДС</dd></div>
+            <div class="grand-total"><dt>Итого</dt><dd>{{ formatMoney(data.total) }}</dd></div>
+            <template v-if="data.advance_percent">
+                <div><dt>Аванс по договору, {{ data.advance_percent }}%</dt><dd>{{ formatMoney(data.advance) }}</dd></div>
+                <div><dt>Остаток</dt><dd>{{ formatMoney(data.balance) }}</dd></div>
+            </template>
+        </dl>
+        <section v-if="data.payments?.length" class="document-payments">
+            <h3>График платежей</h3>
+            <table><thead><tr><th>Условие</th><th>Доля</th><th>Сумма</th></tr></thead>
+            <tbody><tr v-for="(payment, index) in data.payments" :key="index"><td>{{ payment.label || 'Платёж' }}<small v-if="payment.due_on">По {{ payment.due_on.split('-').reverse().join('.') }}</small></td><td>{{ payment.percent }}%</td><td>{{ formatMoney(payment.amount) }}</td></tr></tbody></table>
+        </section>
+        <p v-if="data.notes" class="paper-notes">{{ data.notes }}</p>
+    </article>
