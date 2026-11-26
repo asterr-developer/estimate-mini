@@ -1,9 +1,12 @@
 <header class="mini-header">
-    <div class="mini-brand"><span class="mark">С</span><div><strong>Смета</strong><small>Подбор услуг</small></div></div>
+    <div class="mini-frame masthead-inner">
+    <div class="mini-brand"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 4h7l4 4v12H7zM14 4v5h4M10 13h5M10 16h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg></span><div><strong>Смета</strong><small>Подбор услуг</small></div></div>
+    </div>
 </header>
+<main class="mini-frame mini-content">
 <nav class="mini-nav" aria-label="Разделы">
     <button :aria-pressed="page === 'catalog'" @click="tab('catalog')">Услуги</button>
-    <button :aria-pressed="page === 'cart'" @click="tab('cart')">Заявка <span v-if="positions.length">{{ positions.length }}</span></button>
+    <button :aria-pressed="page === 'cart'" @click="tab('cart')">Заявка <span v-if="positions.length" class="nav-count">{{ positions.length }}</span></button>
     <button :aria-pressed="page === 'requests'" @click="tab('requests')">Поддержка</button>
 </nav>
 <p v-if="error" class="mini-error" role="alert">{{ error }}</p>
@@ -19,6 +22,8 @@
         <button v-for="item in categories" :key="item" :aria-pressed="category === item" @click="category = item">{{ item }}</button>
     </div>
     <p v-if="pending && !visible.length" role="status">Загружаем услуги…</p>
+    <div v-if="!pending && !error && !visible.length" class="service">В этой категории пока нет услуг.</div>
+    <div v-if="visible.length" class="service-grid">
     <article v-for="item in visible" :key="item.id" class="service">
         <div><h2>{{ item.name }}</h2><p>{{ item.description }}</p></div>
         <div class="service-bottom">
@@ -27,9 +32,10 @@
             <button class="primary" @click="change(item, (cart[item.id] || 0) + 1)">{{ cart[item.id] ? '+ Ещё (' + cart[item.id] + ')' : 'Добавить' }}</button>
         </div>
     </article>
+    </div>
 </section>
 <section v-else-if="page === 'cart'">
-    <h1>Моя заявка</h1>
+    <div class="intro"><h1>Моя заявка</h1></div>
     <template v-if="positions.length">
         <article v-for="item in positions" :key="item.id" class="service cart-row">
             <div><h2>{{ item.name }}</h2><p>{{ format(item.total) }}</p></div>
@@ -44,7 +50,7 @@
     <div v-else class="service"><p>В заявке пока нет услуг.</p><button class="primary" @click="tab('catalog')">К услугам</button></div>
 </section>
 <section v-else>
-    <div class="section-title"><h1>Поддержка</h1><button type="button" class="secondary" :disabled="pending" @click="tab('requests')">Обновить</button><button v-if="request" class="secondary" @click="selected = null">Все обращения</button></div>
+    <div class="intro section-title"><h1>Поддержка</h1><button type="button" class="secondary" :disabled="pending" @click="tab('requests')">Обновить</button><button v-if="request" class="secondary" @click="selected = null">Все обращения</button></div>
     <template v-if="request">
         <div class="service">
             <h2>{{ request.subject }} № {{ request.id }}</h2>
@@ -74,3 +80,4 @@
         </div>
     </template>
 </section>
+</main>
